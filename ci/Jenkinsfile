@@ -1,0 +1,185 @@
+def MAX_BUILDS_COUNT = 10
+def PIPELINE_NAME = "drd-reports-tests"
+def GIT_REPOSITORY = "git@gitlab.cardpay-test.com:ui-team/qa/drd-reports-tests.git"
+
+pipeline {
+    agent { label "master" }
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(
+                logRotator(
+                        numToKeepStr: "${MAX_BUILDS_COUNT}",
+                        artifactNumToKeepStr: "${MAX_BUILDS_COUNT}"
+                )
+        )
+        skipDefaultCheckout(true)
+        copyArtifactPermission("${PIPELINE_NAME}")
+        disableResume()
+        timeout(time: 1, unit: "DAYS")
+    }
+    environment {
+        JUNIT_RESULTS_XML = "**/build/test-results/**/TEST-*.xml"
+    }
+    parameters {
+        separator(name: "SOURCES", sectionHeader: "Sources",
+                separatorStyle: "border-width: 0",
+                sectionHeaderStyle: """
+                background-color: #7ea6d3;
+                text-align: center;
+                padding: 4px;
+                color: #343434;
+                font-size: 22px;
+                font-weight: normal;
+                text-transform: uppercase;
+                font-family: "Orienta", sans-serif;
+                letter-spacing: 1px;
+                font-style: italic;
+            """
+        )
+        gitParameter(
+                branchFilter: ".*",
+                tagFilter: "*",
+                sortMode: "ASCENDING_SMART",
+                selectedValue: "DEFAULT",
+                defaultValue: "origin/master",
+                name: "git_branch",
+                type: "PT_BRANCH_TAG",
+                useRepository: "${GIT_REPOSITORY}",
+                description: "Choose test sources"
+        )
+        separator(name: "TEST_ENVIRONMENT", sectionHeader: "Test Environment",
+                separatorStyle: "border-width: 0",
+                sectionHeaderStyle: """
+				background-color: #dbdb8e;
+				text-align: center;
+				padding: 4px;
+				color: #343434;
+				font-size: 22px;
+				font-weight: normal;
+				text-transform: uppercase;
+				font-family: "Orienta", sans-serif;
+				letter-spacing: 1px;
+				font-style: italic;
+			"""
+        )
+        choice(
+                choices: ["chrome", "firefox"],
+                description: "Choose a browser",
+                name: "browser_name"
+        )
+        choice(
+                choices: ["preprod"],
+                description: "Choose a stand for testing",
+                name: "stand_name"
+        )
+        separator(name: "OTHER_SETTINGS", sectionHeader: "Other settings",
+                separatorStyle: "border-width: 0",
+                sectionHeaderStyle: """
+                background-color: #79E271;
+                text-align: center;
+                padding: 4px;
+                color: #343434;
+                font-size: 22px;
+                font-weight: normal;
+                text-transform: uppercase;
+                font-family: "Orienta", sans-serif;
+                letter-spacing: 1px;
+                font-style: italic;
+            """
+        )
+        choice(
+                choices: ["All", "Chargebacks"],
+                description: "Choose a tag",
+                name: "tag_name"
+        )
+        choice(
+                choices: ["auto", "1", "2", "3", "4"],
+                description: "Choose a max number of concurrently executing tests",
+                name: "forks_count"
+        )
+        choice(
+                choices: ["0", "1", "2", "3"],
+                description: "Choose a max retry count for failed tests",
+                name: "retry_count"
+        )
+    }
+    stages {
+        stage("Clean workspace") {
+            steps {
+                cleanWs()
+            }
+        }
+        stage("Prepare environment") {
+            steps {
+                parallel(
+                        "Set build name": {
+                            script {
+                                currentBuild.displayName = "${BUILD_NUMBER}"
+                                currentBuild.description = "${params.git_branch} ${params.browser_name} ${params.stand_name} ${params.tag_name} ${params.forks_count} ${params.retry_count} ${currentBuild.getBuildCauses().first().shortDescription}"
+                            }
+                        },
+                        "Checkout sources": {
+                            checkout(
+                                    [$class                           : "GitSCM",
+                                     branches                         : [[name: "${params.git_branch}"]],
+                                     doGenerateSubmoduleConfigurations: false,
+                                     extensions                       : [],
+                                     submoduleCfg                     : [],
+                                     userRemoteConfigs                : [[url: "${GIT_REPOSITORY}"]]
+                                    ]
+                            )
+                        }
+                )
+            }
+        }
+        stage("Copy artifacts from last build") {
+            steps {
+                copyArtifacts(
+                        projectName: PIPELINE_NAME,
+                        filter: "allure-report/history/*.json",
+                        flatten: "true",
+                        fingerprintArtifacts: "true",
+                        optional: "true",
+                        target: "allure-results/history",
+                        selector: lastWithArtifacts()
+                )
+            }
+        }
+        stage("Run tests") {
+            steps {
+                sh """
+                      https_proxy_host=\$(echo ${env.https_proxy} | cut -d\'/\' -f 3 | cut -d\':\' -f 1)
+                      https_proxy_port=\$(echo ${env.https_proxy} | cut -d\':\' -f 3)
+                      imaps_proxy_host=\$(echo ${env.imaps_proxy} | cut -d\'/\' -f 3 | cut -d\':\' -f 1)
+                      imaps_proxy_port=\$(echo ${env.imaps_proxy} | cut -d\':\' -f 2)
+                      chmod +x gradlew
+                      ./gradlew test -Dbuild.network_access=allow -Dhttps.proxy.host=\$https_proxy_host -Dhttps.proxy.port=\$https_proxy_port -Dimaps.proxy.host=\$imaps_proxy_host -Dimaps.proxy.port=\$imaps_proxy_port -Dforks.count=${params.forks_count} -Dtag.name=${params.tag_name} -Dretry.count=${params.retry_count} -Dbrowser.name=${params.browser_name} -Dstand.name=${params.stand_name}
+                   """
+            }
+        }
+    }
+    post {
+        always {
+            sh "find . -name 'TEST-*.xml' -exec touch {} \\;"
+            junit allowEmptyResults: true, testResults: "${JUNIT_RESULTS_XML}"
+            script {
+                allure([
+                        includeProperties: true,
+                        jdk              : "",
+                        properties       : [],
+                        reportBuildPolicy: "ALWAYS",
+                        results          : [[path: "keycloak-tests/allure-results"]]
+                ])
+            }
+            step(
+                    artifacts: "allure-report/history/history-trend.json, allure-reports/history/history.json",
+                    allowEmptyArchive: true,
+                    $class: "ArtifactArchiver",
+                    defaultExcludes: false,
+                    followSymlinks: false,
+                    fingerprint: true
+            )
+        }
+    }
+}

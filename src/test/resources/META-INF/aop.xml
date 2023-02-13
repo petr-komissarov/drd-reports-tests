@@ -1,0 +1,9 @@
+<!--  https://github.com/allure-framework/allure-java/tree/master/allure-junit5-assert  -->
+
+<aspectj>
+    <weaver>
+        <include within="io.qameta..*"/>
+        <include within="org.junit..*"/>
+        <include within="com.unlimint..*"/>
+    </weaver>
+</aspectj>

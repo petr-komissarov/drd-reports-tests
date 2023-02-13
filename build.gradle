@@ -1,0 +1,140 @@
+plugins {
+    id "com.adarshr.test-logger" version "${testLoggerVersion}"
+    id "io.qameta.allure" version "${allurePluginVersion}"
+    id "java"
+    id "org.gradle.test-retry" version "${testRetryVersion}"
+}
+
+repositories {
+    mavenCentral()
+}
+
+setDescription("DRD Reports Tests")
+setGroup("com.unlimint.drd")
+setVersion("${projectVersion}")
+setSourceCompatibility(JavaVersion.VERSION_1_8)
+setTargetCompatibility(getSourceCompatibility())
+def allureResults = new File(projectDir.absolutePath, "allure-results")
+def allureReport = new File(projectDir.absolutePath, "allure-report")
+
+wrapper {
+    setGradleVersion("$gradleVersion")
+}
+
+task killDrivers(type: Exec) {
+    setWorkingDir("./src/test/resources/scripts")
+    setIgnoreExitValue(true)
+    if (System.getProperty("os.name").toString().toLowerCase().contains("win")) {
+        setCommandLine("cmd", "/c", "winKillDrivers.cmd")
+    } else {
+        setCommandLine("bash", "./linuxKillDrivers.sh")
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    if (!System.getProperty("user.name").toLowerCase().contains("jenkins")) {
+        dependsOn("killDrivers")
+    }
+}
+
+clean.doFirst {
+    fileTree(dir: allureResults, excludes: ["history", "**/.gitkeep"]).each {
+        delete it
+    }
+    fileTree(dir: allureReport, exclude: "**/.gitkeep").each {
+        delete it
+    }
+}
+
+dependencies {
+    testImplementation("com.codeborne:selenide:${selenideVersion}")
+    testImplementation("com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}")
+    testImplementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:${jacksonVersion}")
+    testImplementation("com.testautomationguru.pdfutil:pdf-util:${pdfUtilVersion}")
+    testImplementation("io.qameta.allure:allure-junit5:${allureVersion}")
+    testImplementation("io.qameta.allure:allure-rest-assured:${allureVersion}")
+    testImplementation("io.qameta.allure:allure-selenide:${allureVersion}")
+    testImplementation("io.rest-assured:rest-assured:${restAssuredVersion}")
+    testImplementation("javax.mail:mail:${javaxMailVersion}")
+    testImplementation("org.apache.logging.log4j:log4j-api:${log4jVersion}")
+    testImplementation("org.apache.logging.log4j:log4j-core:${log4jVersion}")
+    testImplementation("org.apache.logging.log4j:log4j-jul:${log4jVersion}")
+    testImplementation("org.apache.logging.log4j:log4j-slf4j-impl:${log4jVersion}")
+    testImplementation("org.awaitility:awaitility:${awaitilityVersion}")
+    testImplementation(platform("org.junit:junit-bom:${junit5Version}"))
+    testImplementation("org.junit.jupiter:junit-jupiter:${junit5Version}")
+    testCompileOnly("org.projectlombok:lombok:${lombokVersion}")
+    testAnnotationProcessor("org.projectlombok:lombok:${lombokVersion}")
+}
+
+tasks.withType(Test).configureEach {
+    dependsOn("clean")
+
+    String junitTag = System.getProperty("tag.name") == null
+            ? "All"
+            : System.getProperty("tag.name")
+    useJUnitPlatform {
+        includeTags(junitTag)
+        excludeEngines("junit-vintage")
+        includeEngines("junit-jupiter")
+    }
+
+    setMaxParallelForks(Runtime.runtime.availableProcessors().intdiv(2) ?: 1)
+    String forks = System.getProperty("forks.count") == null
+            ? "auto"
+            : System.getProperty("forks.count")
+
+    systemProperties["junit.platform.output.capture.stdout"] = true
+    systemProperties["junit.platform.output.capture.stderr"] = true
+    systemProperties["java.util.logging.manager"] = "org.apache.logging.log4j.jul.LogManager"
+    systemProperties["junit.jupiter.extensions.autodetection.enabled"] = true
+    systemProperties["junit.jupiter.testinstance.lifecycle.default"] = "per_method"
+    systemProperties["junit.jupiter.execution.parallel.enabled"] = true
+    systemProperties["junit.jupiter.execution.parallel.mode.default"] = "concurrent"
+    systemProperties["junit.jupiter.execution.parallel.mode.default.classes"] = "concurrent"
+    systemProperties["https.proxy.host"] = System.getProperty("https.proxy.host")
+    systemProperties["https.proxy.port"] = System.getProperty("https.proxy.port")
+    systemProperties["imaps.proxy.host"] = System.getProperty("imaps.proxy.host")
+    systemProperties["imaps.proxy.port"] = System.getProperty("imaps.proxy.port")
+    systemProperties["browser.name"] = System.getProperty("browser.name")
+    systemProperties["stand.name"] = System.getProperty("stand.name")
+
+    if (forks.contains("auto")) {
+        systemProperties["junit.jupiter.execution.parallel.config.strategy"] = "dynamic"
+        systemProperties["junit.jupiter.execution.parallel.config.dynamic.factor"] = 1
+    } else {
+        systemProperties["junit.jupiter.execution.parallel.config.strategy"] = "fixed"
+        systemProperties["junit.jupiter.execution.parallel.config.fixed.parallelism"] = forks.toInteger()
+    }
+
+    ignoreFailures(false)
+    reports {
+        html.setEnabled(false)
+        junitXml.setEnabled(true)
+    }
+    retry {
+        failOnPassedAfterRetry = false
+        maxRetries = System.getProperty("retry.count") == null
+                ? "${maxTestRetries}".toInteger()
+                : System.getProperty("retry.count").toInteger()
+    }
+    doLast {
+        copy {
+            from new File(project.buildDir, "/resources/test/categories.json")
+            into allureResults
+        }
+    }
+}
+
+allure {
+    setAutoconfigure(true)
+    setVersion("${allureVersion}")
+    setAspectjVersion("${aspectjweaverVersion}")
+    resultsDir = allureResults
+    reportDir = allureReport
+}
+
+testlogger {
+    theme "plain-parallel"
+    slowThreshold 0
+}
