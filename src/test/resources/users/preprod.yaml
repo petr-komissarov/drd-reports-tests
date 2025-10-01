@@ -1,10 +1,10 @@
 - login: saap_drd
-  password: Q1w2e3r4@@
+  password: ****
   email: qa_reports@cardpay-test.com
-  emailPassword: xR3Qa*kzqFsZ5sNFC
+  emailPassword: ****
   dbDatabase: drc-nestjs_reports
   dbUser: drc-nestjs_reports
-  dbPassword: V7fzqDd4*Wids1pKU
-  vaultSecretToken: s.XcnX8yUGFcMOOm8j5AJ0wFmO
+  dbPassword: ****
+  vaultSecretToken: ****
   jenkinsUser: jenkins-qa
-  jenkinsToken: 11ba9c7bac45aa59ed37e3560a8d48aa6a
+  jenkinsToken: ****
